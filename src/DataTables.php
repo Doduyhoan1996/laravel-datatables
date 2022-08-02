@@ -1,155 +1,136 @@
 <?php
 
-namespace Yajra\DataTables;
+namespace Yajra\Datatables;
 
-use Illuminate\Contracts\Database\Eloquent\Builder as EloquentBuilder;
-use Illuminate\Contracts\Database\Query\Builder as QueryBuilder;
-use Illuminate\Support\Traits\Macroable;
-use Yajra\DataTables\Exceptions\Exception;
-use Yajra\DataTables\Html\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Collection;
+use Yajra\Datatables\Engines\CollectionEngine;
+use Yajra\Datatables\Engines\EloquentEngine;
+use Yajra\Datatables\Engines\QueryBuilderEngine;
 
-class DataTables
+/**
+ * Class Datatables.
+ *
+ * @package Yajra\Datatables
+ * @method  EloquentEngine eloquent($builder)
+ * @method  CollectionEngine collection(Collection $builder)
+ * @method  QueryBuilderEngine queryBuilder(QueryBuilder $builder)
+ * @author  Arjay Angeles <aqangeles@gmail.com>
+ */
+class Datatables
 {
-    use Macroable;
+    /**
+     * Datatables request object.
+     *
+     * @var \Yajra\Datatables\Request
+     */
+    public $request;
 
     /**
-     * DataTables request object.
+     * Datatables builder.
      *
-     * @var \Yajra\DataTables\Utilities\Request
+     * @var mixed
      */
-    protected Utilities\Request $request;
+    public $builder;
 
     /**
-     * HTML builder instance.
+     * Datatables constructor.
      *
-     * @var \Yajra\DataTables\Html\Builder|null
+     * @param \Yajra\Datatables\Request $request
      */
-    protected ?Builder $html = null;
-
-    /**
-     * Make a DataTable instance from source.
-     * Alias of make for backward compatibility.
-     *
-     * @param  object  $source
-     * @return DataTableAbstract
-     *
-     * @throws \Exception
-     */
-    public static function of($source)
+    public function __construct(Request $request)
     {
-        return self::make($source);
+        $this->request = $request->request->count() ? $request : Request::capture();
     }
 
     /**
-     * Make a DataTable instance from source.
+     * Gets query and returns instance of class.
      *
-     * @param  object  $source
-     * @return DataTableAbstract
-     *
-     * @throws \Yajra\DataTables\Exceptions\Exception
+     * @param  mixed $builder
+     * @return mixed
      */
-    public static function make($source)
+    public static function of($builder)
     {
-        $engines = (array) config('datatables.engines');
-        $builders = (array) config('datatables.builders');
+        $datatables          = app('Yajra\Datatables\Datatables');
+        $datatables->builder = $builder;
 
-        $args = func_get_args();
-        foreach ($builders as $class => $engine) {
-            if ($source instanceof $class) {
-                $callback = [$engines[$engine], 'create'];
-
-                if (is_callable($callback)) {
-                    /** @var \Yajra\DataTables\DataTableAbstract $instance */
-                    $instance = call_user_func_array($callback, $args);
-
-                    return $instance;
-                }
-            }
+        if ($builder instanceof QueryBuilder) {
+            $ins = $datatables->usingQueryBuilder($builder);
+        } else {
+            $ins = $builder instanceof Collection ? $datatables->usingCollection($builder) : $datatables->usingEloquent($builder);
         }
 
-        foreach ($engines as $engine) {
-            $canCreate = [$engine, 'canCreate'];
-            if (is_callable($canCreate) && call_user_func_array($canCreate, $args)) {
-                $create = [$engine, 'create'];
+        return $ins;
+    }
 
-                if (is_callable($create)) {
-                    /** @var \Yajra\DataTables\DataTableAbstract $instance */
-                    $instance = call_user_func_array($create, $args);
+    /**
+     * Datatables using Query Builder.
+     *
+     * @param \Illuminate\Database\Query\Builder $builder
+     * @return \Yajra\Datatables\Engines\QueryBuilderEngine
+     */
+    public function usingQueryBuilder(QueryBuilder $builder)
+    {
+        return new QueryBuilderEngine($builder, $this->request);
+    }
 
-                    return $instance;
-                }
-            }
+    /**
+     * Datatables using Collection.
+     *
+     * @param \Illuminate\Support\Collection $builder
+     * @return \Yajra\Datatables\Engines\CollectionEngine
+     */
+    public function usingCollection(Collection $builder)
+    {
+        return new CollectionEngine($builder, $this->request);
+    }
+
+    /**
+     * Datatables using Eloquent.
+     *
+     * @param  mixed $builder
+     * @return \Yajra\Datatables\Engines\EloquentEngine
+     */
+    public function usingEloquent($builder)
+    {
+        return new EloquentEngine($builder, $this->request);
+    }
+
+    /**
+     * Allows api call without the "using" word.
+     *
+     * @param  string $name
+     * @param  mixed $arguments
+     * @return $this|mixed
+     */
+    public function __call($name, $arguments)
+    {
+        $name = 'using' . ucfirst($name);
+
+        if (method_exists($this, $name)) {
+            return call_user_func_array([$this, $name], $arguments);
         }
 
-        throw new Exception('No available engine for '.get_class($source));
+        return trigger_error('Call to undefined method ' . __CLASS__ . '::' . $name . '()', E_USER_ERROR);
+    }
+
+    /**
+     * Get html builder class.
+     *
+     * @return \Yajra\Datatables\Html\Builder
+     */
+    public function getHtmlBuilder()
+    {
+        return app('Yajra\Datatables\Html\Builder');
     }
 
     /**
      * Get request object.
      *
-     * @return \Yajra\DataTables\Utilities\Request
+     * @return \Yajra\Datatables\Request|static
      */
     public function getRequest()
     {
-        return app('datatables.request');
-    }
-
-    /**
-     * Get config instance.
-     *
-     * @return \Yajra\DataTables\Utilities\Config
-     */
-    public function getConfig()
-    {
-        return app('datatables.config');
-    }
-
-    /**
-     * DataTables using Query.
-     *
-     * @param  QueryBuilder  $builder
-     * @return \Yajra\DataTables\QueryDataTable
-     */
-    public function query(QueryBuilder $builder): QueryDataTable
-    {
-        return QueryDataTable::create($builder);
-    }
-
-    /**
-     * DataTables using Eloquent Builder.
-     *
-     * @param  \Illuminate\Contracts\Database\Eloquent\Builder  $builder
-     * @return \Yajra\DataTables\EloquentDataTable
-     */
-    public function eloquent(EloquentBuilder $builder): EloquentDataTable
-    {
-        return EloquentDataTable::create($builder);
-    }
-
-    /**
-     * DataTables using Collection.
-     *
-     * @param  \Illuminate\Support\Collection<array-key, array>|array  $collection
-     * @return \Yajra\DataTables\CollectionDataTable
-     */
-    public function collection($collection): CollectionDataTable
-    {
-        return CollectionDataTable::create($collection);
-    }
-
-    /**
-     * Get html builder instance.
-     *
-     * @return \Yajra\DataTables\Html\Builder
-     *
-     * @throws \Yajra\DataTables\Exceptions\Exception
-     */
-    public function getHtmlBuilder()
-    {
-        if (! class_exists(Builder::class)) {
-            throw new Exception('Please install yajra/laravel-datatables-html to be able to use this function.');
-        }
-
-        return $this->html ?: $this->html = app('datatables.html');
+        return $this->request;
     }
 }

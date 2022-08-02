@@ -1,14 +1,71 @@
 <?php
 
-namespace Yajra\DataTables;
+namespace Yajra\Datatables;
 
+use Collective\Html\HtmlServiceProvider;
 use Illuminate\Support\ServiceProvider;
-use Illuminate\Support\Str;
-use Yajra\DataTables\Utilities\Config;
-use Yajra\DataTables\Utilities\Request;
+use League\Fractal\Manager;
+use League\Fractal\Serializer\DataArraySerializer;
+use Maatwebsite\Excel\ExcelServiceProvider;
+use Yajra\Datatables\Generators\DataTablesMakeCommand;
+use Yajra\Datatables\Generators\DataTablesScopeCommand;
 
-class DataTablesServiceProvider extends ServiceProvider
+/**
+ * Class DatatablesServiceProvider.
+ *
+ * @package Yajra\Datatables
+ * @author  Arjay Angeles <aqangeles@gmail.com>
+ */
+class DatatablesServiceProvider extends ServiceProvider
 {
+    /**
+     * Indicates if loading of the provider is deferred.
+     *
+     * @var bool
+     */
+    protected $defer = false;
+
+    /**
+     * Bootstrap the application events.
+     *
+     * @return void
+     */
+    public function boot()
+    {
+        $this->loadViewsFrom(__DIR__ . '/resources/views', 'datatables');
+
+        $this->publishAssets();
+
+        $this->registerCommands();
+    }
+
+    /**
+     * Publish datatables assets.
+     */
+    protected function publishAssets()
+    {
+        $this->publishes([
+            __DIR__ . '/config/config.php' => config_path('datatables.php'),
+        ], 'datatables');
+
+        $this->publishes([
+            __DIR__ . '/resources/assets/buttons.server-side.js' => public_path('vendor/datatables/buttons.server-side.js'),
+        ], 'datatables');
+
+        $this->publishes([
+            __DIR__ . '/resources/views' => base_path('/resources/views/vendor/datatables'),
+        ], 'datatables');
+    }
+
+    /**
+     * Register datatables commands.
+     */
+    protected function registerCommands()
+    {
+        $this->commands(DataTablesMakeCommand::class);
+        $this->commands(DataTablesScopeCommand::class);
+    }
+
     /**
      * Register the service provider.
      *
@@ -17,62 +74,32 @@ class DataTablesServiceProvider extends ServiceProvider
     public function register()
     {
         if ($this->isLumen()) {
-            require_once 'lumen.php';
+            require_once 'fallback.php';
         }
 
-        $this->setupAssets();
+        $this->registerRequiredProviders();
 
-        $this->app->alias('datatables', DataTables::class);
         $this->app->singleton('datatables', function () {
-            return new DataTables;
+            return new Datatables($this->app->make(Request::class));
         });
 
-        $this->app->singleton('datatables.request', function () {
-            return new Request;
-        });
+        $this->app->singleton('datatables.fractal', function () {
+            $fractal = new Manager;
+            $config  = $this->app['config'];
+            $request = $this->app['request'];
 
-        $this->app->singleton('datatables.config', Config::class);
-    }
-
-    /**
-     * Boot the instance, add macros for datatable engines.
-     *
-     * @return void
-     */
-    public function boot()
-    {
-        $engines = (array) config('datatables.engines');
-        foreach ($engines as $engine => $class) {
-            $engine = Str::camel($engine);
-
-            if (! method_exists(DataTables::class, $engine) && ! DataTables::hasMacro($engine)) {
-                DataTables::macro($engine, function () use ($class) {
-                    $canCreate = [$class, 'canCreate'];
-                    if (is_callable($canCreate) && ! call_user_func_array($canCreate, func_get_args())) {
-                        throw new \InvalidArgumentException();
-                    }
-
-                    $create = [$class, 'create'];
-                    if (is_callable($create)) {
-                        return call_user_func_array($create, func_get_args());
-                    }
-                });
+            $includesKey = $config->get('datatables.fractal.includes', 'include');
+            if ($request->get($includesKey)) {
+                $fractal->parseIncludes($request->get($includesKey));
             }
-        }
-    }
 
-    /**
-     * Setup package assets.
-     *
-     * @return void
-     */
-    protected function setupAssets()
-    {
-        $this->mergeConfigFrom($config = __DIR__.'/config/datatables.php', 'datatables');
+            $serializer = $config->get('datatables.fractal.serializer', DataArraySerializer::class);
+            $fractal->setSerializer(new $serializer);
 
-        if ($this->app->runningInConsole()) {
-            $this->publishes([$config => config_path('datatables.php')], 'datatables');
-        }
+            return $fractal;
+        });
+
+        $this->registerAliases();
     }
 
     /**
@@ -82,6 +109,36 @@ class DataTablesServiceProvider extends ServiceProvider
      */
     protected function isLumen()
     {
-        return Str::contains($this->app->version(), 'Lumen');
+        return str_contains($this->app->version(), 'Lumen');
+    }
+
+    /**
+     * Register 3rd party providers.
+     */
+    protected function registerRequiredProviders()
+    {
+        $this->app->register(HtmlServiceProvider::class);
+        $this->app->register(ExcelServiceProvider::class);
+    }
+
+    /**
+     * Create aliases for the dependency.
+     */
+    protected function registerAliases()
+    {
+        if (class_exists('Illuminate\Foundation\AliasLoader')) {
+            $loader = \Illuminate\Foundation\AliasLoader::getInstance();
+            $loader->alias('Datatables', \Yajra\Datatables\Facades\Datatables::class);
+        }
+    }
+
+    /**
+     * Get the services provided by the provider.
+     *
+     * @return string[]
+     */
+    public function provides()
+    {
+        return ['datatables'];
     }
 }
